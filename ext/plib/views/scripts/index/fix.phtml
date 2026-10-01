@@ -1,0 +1,28 @@
+<?php $V = 'Modules_EmailSpamTester_View'; $f = $this->fix; ?>
+<div class="est">
+<section class="est-card">
+  <h3 class="est-h"><?php echo $V::h($V::fixTitle($f)) ?></h3>
+  <?php if ($f['action'] === 'enable_dkim'): ?>
+    <p>Plesk will sign email from <?php echo $V::h($this->domain->getDisplayName()) ?> with its DKIM key<?php echo $f['reason'] === 'publish_key_after' ? '. The domain\'s DNS is served elsewhere: after this, add the DKIM record at your DNS provider (run the check again to see it).' : ' and publish the key in the DNS zone.' ?></p>
+  <?php else: ?>
+    <?php if ($f['mode'] !== 'apply'): ?><p class="est-note">The world reads this domain's DNS from another server, so a change here would not be seen. Add this record at your DNS provider:</p><?php endif ?>
+    <table class="est-table est-changes">
+      <thead><tr><th>Record</th><th>Now</th><th>After</th></tr></thead>
+      <tbody><tr>
+        <td><code>TXT <?php echo $V::h($f['host']) ?></code></td>
+        <td><?php if (!$f['before']): ?><span class="est-muted">(none)</span><?php endif ?><?php foreach ((array)$f['before'] as $b): ?><code class="est-record"><?php echo $V::h($b) ?></code><?php endforeach ?></td>
+        <td><code class="est-record"><?php echo $V::h($f['after']) ?></code>
+          <button type="button" class="est-btn est-copy" data-copy="<?php echo $V::h($f['after']) ?>" data-done="Copied">Copy</button></td>
+      </tr></tbody>
+    </table>
+  <?php endif ?>
+  <?php if ($f['mode'] === 'apply'): ?>
+    <form method="post" action="<?php echo $V::h($this->action) ?>"><input type="hidden" name="forgery_protection_token" value="">
+      <button type="submit" class="est-btn est-primary">Apply</button>
+      <a class="est-btn" href="<?php echo $V::h($this->back) ?>">Cancel</a></form>
+    <p class="est-muted est-small">The change is logged and can be undone from the Test tab.</p>
+  <?php else: ?>
+    <p><a class="est-btn" href="<?php echo $V::h($this->back) ?>">Back</a></p>
+  <?php endif ?>
+</section>
+</div>

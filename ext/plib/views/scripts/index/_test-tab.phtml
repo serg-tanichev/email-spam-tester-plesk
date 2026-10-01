@@ -1,0 +1,92 @@
+<?php
+$V = 'Modules_EmailSpamTester_View';
+$u = $this->urls;
+$c = $this->check;
+$csrf = '<input type="hidden" name="forgery_protection_token" value="">';
+?>
+<?php if ($c): $checks = $c['checks']; ?>
+<section class="est-card">
+  <h3 class="est-h">Before you send</h3>
+  <p class="est-muted"><?php echo $c['authoritative']
+      ? 'This server answers for the domain\'s DNS, so fixes can be applied here.'
+      : 'The domain\'s DNS is served elsewhere. Fixes show the records to add at your DNS provider.' ?></p>
+  <ul class="est-pre">
+    <li><strong>SPF</strong>
+      <?php if (!$checks['spf']['records']): ?><span class="est-bad">no record</span>
+      <?php else: foreach ($checks['spf']['ips'] as $ip => $result): ?>
+        <span class="<?php echo $result === 'pass' ? 'est-good' : 'est-bad' ?>"><?php echo $V::h($ip) ?>: <?php echo $V::h($result) ?></span>
+      <?php endforeach ?>
+        <span class="est-muted"><?php echo (int)$checks['spf']['lookups'] ?> of 10 DNS lookups</span><?php endif ?></li>
+    <li><strong>DKIM</strong>
+      <?php if (!$checks['dkim']['enabled']): ?><span class="est-bad">signing is off</span>
+      <?php elseif ($checks['dkim']['matches_panel']): ?><span class="est-good">published, matches the key Plesk signs with</span>
+      <?php else: ?><span class="est-bad">the key in DNS is not the one Plesk signs with</span><?php endif ?></li>
+    <li><strong>DMARC</strong>
+      <?php if ($checks['dmarc']['records']): ?><code><?php echo $V::h($checks['dmarc']['records'][0]) ?></code>
+      <?php else: ?><span class="est-bad">no policy</span><?php endif ?></li>
+    <li><strong>MX</strong> <?php echo $checks['mx'] ? $V::h(implode(', ', $checks['mx'])) : '<span class="est-bad">none</span>' ?></li>
+  </ul>
+  <?php if ($c['fixes']): ?>
+  <ul class="est-fixlist">
+    <?php foreach ($c['fixes'] as $f): ?>
+      <li><strong><?php echo $V::h($V::fixTitle($f)) ?></strong>
+      <?php if ($f['reason'] === 'spf_too_many_lookups'): ?>
+        <span class="est-muted">The SPF record needs more than 10 DNS lookups. Remove includes of services you no longer use.</span>
+      <?php elseif ($this->canFix): ?>
+        <a class="est-btn est-primary" href="<?php echo $V::h($u['fix'] . '&fix=' . rawurlencode($f['id'])) ?>"><?php echo $f['mode'] === 'apply' ? 'Fix' : 'Show the record' ?></a>
+      <?php endif ?></li>
+    <?php endforeach ?>
+  </ul>
+  <?php endif ?>
+</section>
+<?php endif ?>
+
+<section class="est-card">
+  <h3 class="est-h">Send a test email</h3>
+  <p class="est-muted">The email leaves from this server, through its mail server, the way the domain's real mail does. Email Spam Tester runs every check on it and shows the report here.</p>
+  <?php if (!$this->mailEnabled && !$this->hasHosting): ?>
+    <p class="est-note">This domain has neither mail service nor web hosting, so there is nothing to send from.</p>
+  <?php else: ?>
+  <form method="post" action="<?php echo $V::h($u['send']) ?>" class="est-form" data-est-send>
+    <?php echo $csrf ?>
+    <fieldset><legend>Send it as</legend>
+      <?php if ($this->mailEnabled): ?><label><input type="radio" name="path" value="mailbox" checked> a mailbox (mail app, webmail)</label><?php endif ?>
+      <?php if ($this->hasHosting): ?><label><input type="radio" name="path" value="site" <?php echo $this->mailEnabled ? '' : 'checked' ?>> the website (contact forms, WordPress, shop notifications)</label><?php endif ?>
+    </fieldset>
+    <label>From <select name="from"><?php foreach ($this->senders as $s): ?><option><?php echo $V::h($s) ?></option><?php endforeach ?></select></label>
+    <fieldset><legend>Email</legend>
+      <label><input type="radio" name="variant" value="standard" checked> the standard test email</label>
+      <label><input type="radio" name="variant" value="own"> my own email (a newsletter, a notification)</label>
+    </fieldset>
+    <div class="est-own" hidden>
+      <label>Subject <input type="text" name="subject" maxlength="250"></label>
+      <label>HTML <textarea name="html" rows="8" placeholder="Paste the HTML of your email"></textarea></label>
+      <label>Plain text (optional) <textarea name="text" rows="4"></textarea></label>
+    </div>
+    <?php if ($this->placement): ?>
+      <label><input type="checkbox" name="placement" value="1" checked> Also check the folder at email providers</label>
+      <p class="est-muted est-small">One copy goes to each test mailbox at a range of email providers, a few seconds apart. At Gmail these are public test mailboxes: anyone there can see the subject, the sender name and the folder. Do not send confidential content.</p>
+    <?php endif ?>
+    <button type="submit" class="est-btn est-primary">Send the test</button>
+  </form>
+  <?php endif ?>
+</section>
+
+<?php if ($this->fixLog): ?>
+<section class="est-card">
+  <h3 class="est-h">Changes made here</h3>
+  <table class="est-table">
+    <?php foreach ($this->fixLog as $e): ?>
+    <tr>
+      <td><?php echo $V::h($V::when($e['at'])) ?></td>
+      <td><?php echo $V::h($V::fixTitle(['id' => $e['fix'], 'action' => $e['action']])) ?><?php if ($e['host']): ?> <code><?php echo $V::h($e['host']) ?></code><?php endif ?></td>
+      <td><?php echo $V::h($e['by']) ?></td>
+      <td><?php if (!empty($e['reverted_at'])): ?><span class="est-muted">undone</span>
+      <?php elseif ($this->canFix): ?>
+        <form method="post" action="<?php echo $V::h($u['revert']) ?>"><?php echo $csrf ?><input type="hidden" name="entry" value="<?php echo $V::h($e['id']) ?>"><button class="est-btn" type="submit">Undo</button></form>
+      <?php endif ?></td>
+    </tr>
+    <?php endforeach ?>
+  </table>
+</section>
+<?php endif ?>

@@ -1,0 +1,77 @@
+<?php
+$V = 'Modules_EmailSpamTester_View';
+$u = $this->urls;
+$csrf = '<input type="hidden" name="forgery_protection_token" value="">';
+$active = isset($this->server['state']) && $this->server['state'] === 'active';
+$feed = $this->feed;
+?>
+<section class="est-card">
+  <h3 class="est-h">Constant monitoring</h3>
+  <p class="est-muted">With monitoring on, the server sends a copy of each email the domain sends to a private address at Email Spam Tester, and each copy gets a technical report: DKIM, SPF, DMARC, the sending server, blocklists. Repeats of the same template within an hour are counted, not checked again. Copies are kept two days; reports of them are private.</p>
+  <?php if ($this->entry): ?>
+    <form method="post" action="<?php echo $V::h($u['monitor'] . '&state=off') ?>"><?php echo $csrf ?>
+      <p><span class="est-good">Monitoring is on</span> since <?php echo $V::h($V::when($this->entry['on_at'])) ?>.
+      <button type="submit" class="est-btn">Turn off</button></p></form>
+  <?php elseif (!$active): ?>
+    <p class="est-note">The server administrator has not allowed constant monitoring on this server.</p>
+  <?php elseif (!$this->canMonitor): ?>
+    <p class="est-note">Your hosting plan does not include constant monitoring.</p>
+  <?php else: ?>
+    <form method="post" action="<?php echo $V::h($u['monitor'] . '&state=on') ?>"><?php echo $csrf ?>
+      <button type="submit" class="est-btn est-primary">Turn on for <?php echo $V::h($this->domain->getDisplayName()) ?></button></form>
+  <?php endif ?>
+</section>
+
+<?php if ($feed): $s = $feed['summary']; ?>
+<section class="est-card">
+  <h3 class="est-h">Last 24 hours</h3>
+  <?php $n = function ($count, $one, $many) { return (int)$count . ' ' . ((int)$count === 1 ? $one : $many); }; ?>
+  <p><strong><?php echo $n($s['letters'], 'email', 'emails') ?></strong>, <?php echo (int)$s['analysed'] ?> checked, <?php echo (int)$s['passed'] ?> passed authentication and server checks<?php if ($s['repeats']): ?>, <?php echo $n($s['repeats'], 'repeat', 'repeats') ?> of a checked template<?php endif ?><?php if ($s['skipped_today']): ?>, <?php echo (int)$s['skipped_today'] ?> over today's limit and not kept<?php endif ?>.</p>
+  <?php if ($s['by_source']): ?>
+  <table class="est-table"><thead><tr><th>From</th><th>Emails</th><th>Checked</th><th>Passed</th></tr></thead><tbody>
+    <?php foreach ($s['by_source'] as $src => $n): ?>
+      <tr><td><?php echo $V::h($V::sourceName($src)) ?></td><td><?php echo (int)$n['letters'] ?></td><td><?php echo (int)$n['analysed'] ?></td><td><?php echo (int)$n['passed'] ?></td></tr>
+    <?php endforeach ?>
+  </tbody></table>
+  <?php endif ?>
+</section>
+
+<?php if ($feed['alerts']): ?>
+<section class="est-card est-alerts">
+  <h3 class="est-h">Alerts</h3>
+  <ul>
+  <?php foreach ($feed['alerts'] as $a): ?>
+    <li class="est-bad"><?php
+      if ($a['type'] === 'dkim') {
+          echo $V::h("DKIM fails in the latest {$a['letters']} of {$a['of']} checked emails" . ($a['was_passing'] ? ', after passing before' : '') . '.');
+      } elseif ($a['type'] === 'auth_source') {
+          $what = trim(($a['spf'] ? 'SPF' : '') . ($a['spf'] && $a['dmarc'] ? ' and ' : '') . ($a['dmarc'] ? 'DMARC' : ''));
+          echo $V::h($V::sourceName($a['source']) . ": $what fail in {$a[$a['spf'] ? 'spf' : 'dmarc']} of {$a['letters']} emails.");
+      } elseif ($a['type'] === 'dnsbl') {
+          echo $V::h("The sending IP {$a['ip']} is on a blocklist: " . implode(', ', $a['lists']) . '.');
+      } else {
+          echo $V::h($a['type']);
+      } ?></li>
+  <?php endforeach ?>
+  </ul>
+</section>
+<?php endif ?>
+
+<section class="est-card">
+  <h3 class="est-h">Latest emails</h3>
+  <?php if (!$feed['letters']): ?><p class="est-muted">No copies yet. They appear here a minute or two after the domain sends an email.</p><?php else: ?>
+  <table class="est-table"><thead><tr><th>When</th><th>Subject</th><th>From</th><th>To</th><th>Score</th><th>Problems</th></tr></thead><tbody>
+  <?php foreach ($feed['letters'] as $l): $link = $u['letter'] . '&slug=' . rawurlencode($l['repeat_of'] ?: $l['slug']); ?>
+    <tr>
+      <td><?php echo $V::h($V::when($l['received_at'])) ?></td>
+      <td><a href="<?php echo $V::h($link) ?>"><?php echo $V::h($l['subject'] ?: '(no subject)') ?></a><?php if ($l['repeat_of']): ?><br><span class="est-muted est-small">repeat of a checked template</span><?php endif ?></td>
+      <td><?php echo $V::h($V::sourceName($l['source'])) ?></td>
+      <td class="est-small"><?php echo $V::h(implode(', ', $l['rcpt_domains'])) ?><?php echo $l['rcpt_more'] ? ' +' . (int)$l['rcpt_more'] : '' ?></td>
+      <td><?php if ($l['score_ours'] !== null): ?><span class="est-score-chip <?php echo $V::scoreClass($l['score_ours']) ?>"><?php echo $V::h($V::score($l['score_ours'])) ?></span><?php else: ?><span class="est-muted"><?php echo $V::h($l['analysis_status']) ?></span><?php endif ?></td>
+      <td class="est-small"><?php foreach (array_slice($l['fails'], 0, 3) as $f): ?><div class="est-<?php echo $V::h($f['status']) ?>-text"><?php echo $V::h($f['title']) ?></div><?php endforeach ?></td>
+    </tr>
+  <?php endforeach ?>
+  </tbody></table>
+  <?php endif ?>
+</section>
+<?php endif ?>

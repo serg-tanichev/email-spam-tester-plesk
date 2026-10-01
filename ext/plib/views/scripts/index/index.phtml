@@ -1,0 +1,20 @@
+<?php $V = 'Modules_EmailSpamTester_View'; ?>
+<div class="est">
+<?php if (!$this->registered): ?>
+  <p class="est-note">This server is not registered with Email Spam Tester yet.
+  <?php if ($this->isAdmin): ?><a href="<?php echo $V::h(pm_Context::getActionUrl('admin', 'index')) ?>">Register it</a>.<?php else: ?>Ask your hosting provider to register it.<?php endif ?></p>
+<?php endif ?>
+<h2 class="est-h">Mail delivery of your domains</h2>
+<table class="est-table">
+  <thead><tr><th>Domain</th><th>Monitoring</th><th></th></tr></thead>
+  <tbody>
+  <?php foreach ($this->domains as $row): $d = $row['domain']; $url = pm_Context::getActionUrl('index', 'domain') . '?id=' . $d->getId(); ?>
+    <tr>
+      <td><a href="<?php echo $V::h($url) ?>"><?php echo $V::h($d->getDisplayName()) ?></a></td>
+      <td><?php echo $row['monitored'] ? '<span class="est-good">on</span>' : '<span class="est-muted">off</span>' ?></td>
+      <td><a class="est-btn" href="<?php echo $V::h($url) ?>">Open</a></td>
+    </tr>
+  <?php endforeach ?>
+  </tbody>
+</table>
+</div>

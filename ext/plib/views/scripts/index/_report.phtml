@@ -1,0 +1,96 @@
+<?php
+$V = 'Modules_EmailSpamTester_View';
+$r = $this->report;
+$aiDone = $V::aiFinished($r['ai_status']);
+$fixes = $this->fixes ?: [];
+?>
+<section class="est-card est-head">
+  <div class="est-score <?php echo $V::scoreClass($r['score_ours']) ?>">
+    <span class="est-score-value"><?php echo $V::h($V::score($r['score_ours'])) ?></span><span class="est-score-max">/100</span>
+    <span class="est-score-label">Score</span>
+  </div>
+  <div class="est-head-text">
+    <p class="est-compat">SpamAssassin-style score: <strong><?php echo $V::h($V::score($r['score_compat'])) ?>/10</strong></p>
+    <?php if (!empty($r['ai_verdict'])): ?><p><?php echo $V::h($r['ai_verdict']) ?></p><?php endif ?>
+    <?php if (empty($r['complete'])): ?><p class="est-note">Some checks could not run. Treat the score as optimistic until they do.</p><?php endif ?>
+  </div>
+  <?php if (!empty($r['subscores'])): ?>
+  <ul class="est-subscores">
+    <?php foreach ($r['subscores'] as $key => $value): ?>
+      <li><span><?php echo $V::h($V::categoryName($key)) ?></span>
+        <span class="est-bar"><span class="<?php echo $V::scoreClass($value) ?>" style="width:<?php echo max(0, min(100, (float)$value)) ?>%"></span></span>
+        <span><?php echo $V::h($V::score($value)) ?></span></li>
+    <?php endforeach ?>
+  </ul>
+  <?php endif ?>
+</section>
+
+<?php if ($fixes): ?>
+<section class="est-card">
+  <h3 class="est-h">What to fix</h3>
+  <ul class="est-fixlist">
+  <?php foreach ($fixes as $f): ?>
+    <li><strong><?php echo $V::h($V::fixTitle($f)) ?></strong>
+    <?php if ($f['reason'] === 'spf_too_many_lookups'): ?>
+      <span class="est-muted">The SPF record needs more than 10 DNS lookups. Remove includes of services you no longer use.</span>
+    <?php elseif ($this->canFix): ?>
+      <a class="est-btn est-primary" href="<?php echo $V::h($this->fixUrl . '&fix=' . rawurlencode($f['id'])) ?>"><?php echo $f['mode'] === 'apply' ? 'Fix' : 'Show the record' ?></a>
+    <?php endif ?></li>
+  <?php endforeach ?>
+  </ul>
+</section>
+<?php endif ?>
+
+<section class="est-card">
+  <h3 class="est-h">Fix plan</h3>
+  <?php if (!$aiDone || $r['ai_status'] === 'skipped'): ?>
+    <?php if ($r['ai_status'] === 'skipped' && $this->adviseUrl): ?>
+      <form method="post" action="<?php echo $V::h($this->adviseUrl) ?>"><input type="hidden" name="forgery_protection_token" value="">
+        <button class="est-btn est-primary" type="submit">Ask AI for a plan</button></form>
+    <?php else: ?><p class="est-muted">The plan is being written; it follows a few minutes after the checks.</p><?php endif ?>
+  <?php elseif ($r['ai_status'] === 'error'): ?>
+    <p class="est-muted">The plan could not be written this time. The checks below still say what to fix.</p>
+  <?php else: foreach ($r['fixes'] as $f): $fx = $f['fix']; ?>
+    <details class="est-aifix">
+      <summary><strong><?php echo $V::h($fx['title']) ?></strong>
+        <?php if ($f['gain_ours'] > 0): ?><span class="est-gain">+<?php echo $V::h($V::score($f['gain_ours'])) ?> points</span><?php endif ?></summary>
+      <?php if (!empty($fx['why'])): ?><p><?php echo $V::h($fx['why']) ?></p><?php endif ?>
+      <?php if (!empty($fx['steps'])): ?><ol><?php foreach ($fx['steps'] as $s): ?><li><?php echo $V::h($s) ?></li><?php endforeach ?></ol><?php endif ?>
+    </details>
+  <?php endforeach; endif ?>
+</section>
+
+<section class="est-card">
+  <h3 class="est-h">All <?php echo count($r['checks']) ?> checks</h3>
+  <?php foreach ($V::grouped($r['checks']) as $category => $checks): ?>
+    <h4 class="est-cat"><?php echo $V::h($V::categoryName($category)) ?></h4>
+    <ul class="est-checks">
+    <?php foreach ($checks as $c): ?>
+      <li class="est-check est-<?php echo $V::h($c['status']) ?>">
+        <details <?php echo in_array($c['status'], ['fail', 'error'], true) ? 'open' : '' ?>>
+          <summary><span class="est-dot" title="<?php echo $V::h($c['status']) ?>"></span><?php echo $V::h($c['title']) ?>
+            <?php if ($c['weight_ours'] < 0): ?><span class="est-penalty"><?php echo $V::h($V::score($c['weight_ours'])) ?></span><?php endif ?></summary>
+          <p><?php echo $V::h($V::summary($c)) ?></p>
+          <?php $cites = isset($c['citations']) ? $c['citations'] : []; $links = array_merge(isset($cites['standards']) ? $cites['standards'] : [], isset($cites['receivers']) ? $cites['receivers'] : []); ?>
+          <?php $links = array_filter($links, function ($l) { return isset($l['url']) && stripos($l['url'], 'https://') === 0; }); ?>
+          <?php if ($links): ?><ul class="est-cites"><?php foreach ($links as $l): ?>
+            <li><a href="<?php echo $V::h($l['url']) ?>" target="_blank" rel="noopener"><?php echo $V::h($l['title']) ?></a><?php if (!empty($l['quote'])): ?><q><?php echo $V::h($l['quote']) ?></q><?php endif ?></li>
+          <?php endforeach ?></ul><?php endif ?>
+        </details>
+      </li>
+    <?php endforeach ?>
+    </ul>
+  <?php endforeach ?>
+</section>
+
+<?php if (!empty($r['message'])): $m = $r['message']; ?>
+<section class="est-card">
+  <h3 class="est-h">Email</h3>
+  <dl class="est-dl">
+    <dt>Subject</dt><dd><?php echo $V::h($m['subject']) ?></dd>
+    <dt>From</dt><dd><?php echo $V::h($m['from_addr']) ?></dd>
+    <dt>Return-Path</dt><dd><?php echo $V::h($m['bounce_address']) ?></dd>
+    <?php if (!empty($m['kind'])): ?><dt>Type</dt><dd><?php echo $V::h($m['kind']) ?></dd><?php endif ?>
+  </dl>
+</section>
+<?php endif ?>

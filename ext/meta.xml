@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<module>
+    <id>email-spam-tester</id>
+    <name>Email Spam Tester</name>
+    <description>Send a test email from a domain on this server and get 42 checks, the folder at email providers and fixes for DKIM, SPF and DMARC; monitor every email a domain sends.</description>
+    <category>mail</category>
+    <version>0.1.0</version>
+    <release>1</release>
+    <vendor>Email Spam Tester</vendor>
+    <url>https://email-spam-tester.com</url>
+    <support_url>https://email-spam-tester.com/contact/</support_url>
+    <plesk_min_version>18.0.50</plesk_min_version>
+    <os>unix</os>
+</module>

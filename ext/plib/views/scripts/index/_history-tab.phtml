@@ -1,0 +1,57 @@
+<?php
+$V = 'Modules_EmailSpamTester_View';
+$u = $this->urls;
+$tests = $this->tests ?: [];
+$points = array_values(array_filter(array_reverse($tests), function ($t) { return $t['score_ours'] !== null; }));
+?>
+<?php if (!$tests): ?>
+  <p class="est-muted">No tests of this domain yet. Send one from the Test tab.</p>
+<?php else: ?>
+<?php if (count($points) > 1): $w = 640; $h = 140; $n = count($points); ?>
+<section class="est-card">
+  <h3 class="est-h">Score over time</h3>
+  <svg class="est-chart" viewBox="0 0 <?php echo $w ?> <?php echo $h ?>" role="img" aria-label="Score over time">
+    <?php foreach ([0, 50, 100] as $g): $y = $h - 10 - ($h - 20) * $g / 100; ?>
+      <line x1="30" x2="<?php echo $w ?>" y1="<?php echo $y ?>" y2="<?php echo $y ?>" class="est-grid-line"/>
+      <text x="0" y="<?php echo $y + 4 ?>" class="est-axis"><?php echo $g ?></text>
+    <?php endforeach ?>
+    <?php $coords = []; foreach ($points as $i => $p) {
+        $x = 40 + ($w - 50) * ($n > 1 ? $i / ($n - 1) : 0);
+        $y = $h - 10 - ($h - 20) * max(0, min(100, $p['score_ours'])) / 100;
+        $coords[] = [$x, $y, $p];
+    } ?>
+    <polyline class="est-line" points="<?php echo implode(' ', array_map(function ($c) { return round($c[0], 1) . ',' . round($c[1], 1); }, $coords)) ?>"/>
+    <?php foreach ($coords as $c): ?>
+      <circle cx="<?php echo round($c[0], 1) ?>" cy="<?php echo round($c[1], 1) ?>" r="3.5" class="<?php echo $V::scoreClass($c[2]['score_ours']) ?>"><title><?php echo $V::h($V::when($c[2]['created_at']) . ': ' . $V::score($c[2]['score_ours'])) ?></title></circle>
+    <?php endforeach ?>
+  </svg>
+</section>
+<?php endif ?>
+
+<table class="est-table">
+  <thead><tr><th>When</th><th>Sent</th><th>Score</th><th>Folders</th><th>Changed since the previous test</th></tr></thead>
+  <tbody>
+  <?php foreach ($tests as $t): $p = $t['placement']; ?>
+    <tr>
+      <td><a href="<?php echo $V::h($u['testPage'] . '&slug=' . rawurlencode($t['slug'])) ?>"><?php echo $V::h($V::when($t['created_at'])) ?></a></td>
+      <td><?php echo $V::h($t['sender'] ?: '') ?><br><span class="est-muted est-small"><?php echo $V::h(($t['variant'] === 'own' ? 'own email' : 'standard email') . ', as ' . ($t['path'] === 'site' ? 'the website' : 'a mailbox')) ?></span></td>
+      <td><?php if ($t['score_ours'] !== null): ?><span class="est-score-chip <?php echo $V::scoreClass($t['score_ours']) ?>"><?php echo $V::h($V::score($t['score_ours'])) ?></span>
+          <span class="est-muted est-small"><?php echo $V::h($V::score($t['score_compat'])) ?>/10</span>
+        <?php elseif ($t['analysis_status'] === 'expired'): ?><span class="est-muted">did not arrive</span>
+        <?php else: ?><span class="est-muted">waiting</span><?php endif ?></td>
+      <td><?php if ($p): $f = $p['folders']; ?>
+          <?php foreach (['inbox', 'primary', 'promotions', 'updates', 'spam'] as $k): if (!empty($f[$k])): ?><span class="est-folder est-folder-<?php echo $k ?>"><?php echo $V::h($V::folderName($k)) ?> <?php echo (int)$f[$k] ?></span> <?php endif; endforeach ?>
+          <?php if ($p['rejected']): ?><span class="est-bad">refused <?php echo (int)$p['rejected'] ?></span><?php endif ?>
+          <span class="est-muted est-small">of <?php echo (int)$p['total'] ?></span>
+        <?php else: ?><span class="est-muted">—</span><?php endif ?></td>
+      <td><?php foreach ($t['changes'] as $ch): ?>
+          <div class="est-change est-to-<?php echo $V::h($ch['to']) ?>"><?php echo $V::h($ch['title']) ?>: <?php echo $V::h($ch['from']) ?> → <?php echo $V::h($ch['to']) ?></div>
+        <?php endforeach ?></td>
+    </tr>
+  <?php endforeach ?>
+  </tbody>
+</table>
+<?php $last = end($tests); if (count($tests) >= 50): ?>
+  <p><a class="est-btn" href="<?php echo $V::h($u['history'] . '&before=' . rawurlencode($last['slug'])) ?>">Older tests</a></p>
+<?php endif ?>
+<?php endif ?>

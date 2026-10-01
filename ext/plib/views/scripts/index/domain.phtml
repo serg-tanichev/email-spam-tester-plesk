@@ -1,0 +1,21 @@
+<?php $V = 'Modules_EmailSpamTester_View'; $u = $this->urls; $d = $this->domain; ?>
+<div class="est">
+<nav class="est-tabs">
+  <a class="<?php echo $this->tab === 'test' ? 'est-active' : '' ?>" href="<?php echo $V::h($u['test']) ?>">Test</a>
+  <a class="<?php echo $this->tab === 'history' ? 'est-active' : '' ?>" href="<?php echo $V::h($u['history']) ?>">History</a>
+  <a class="<?php echo $this->tab === 'monitoring' ? 'est-active' : '' ?>" href="<?php echo $V::h($u['monitoring']) ?>">Monitoring</a>
+</nav>
+<?php if (!$this->registered): ?>
+  <p class="est-note">This server is not registered with Email Spam Tester yet.
+  <?php if ($this->isAdmin): ?><a href="<?php echo $V::h(pm_Context::getActionUrl('admin', 'index')) ?>">Register it</a>.<?php else: ?>Ask your hosting provider to register it.<?php endif ?></p>
+<?php elseif ($this->tab === 'test'): ?>
+  <?php echo $this->partial('index/_test-tab.phtml', ['domain' => $d, 'urls' => $u, 'check' => $this->check,
+      'senders' => $this->senders, 'mailEnabled' => $this->mailEnabled, 'hasHosting' => $this->hasHosting,
+      'placement' => $this->placement, 'canFix' => $this->canFix, 'fixLog' => $this->fixLog]) ?>
+<?php elseif ($this->tab === 'history'): ?>
+  <?php echo $this->partial('index/_history-tab.phtml', ['domain' => $d, 'urls' => $u, 'tests' => $this->tests]) ?>
+<?php else: ?>
+  <?php echo $this->partial('index/_monitoring-tab.phtml', ['domain' => $d, 'urls' => $u, 'server' => $this->server,
+      'entry' => $this->entry, 'feed' => $this->feed, 'canMonitor' => $this->canMonitor]) ?>
+<?php endif ?>
+</div>

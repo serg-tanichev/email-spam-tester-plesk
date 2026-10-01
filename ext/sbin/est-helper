@@ -1,0 +1,267 @@
+#!/opt/psa/bin/py3-python
+"""Email Spam Tester: root side of a test on a Plesk server.
+
+Called only through pm_ApiCli::callSbin. It still checks every argument,
+because it runs as root.
+
+    est-helper send <slug>                            the test email, now (message 0 of the job)
+    est-helper batch <slug>                           the folder-check copies of a test,
+                                                      in the background
+    est-helper log <slug>                             this test's lines in the mail log
+    est-helper hostname                               the name Postfix says HELO with
+
+Every message is a file the extension wrote to the test's job directory
+(jobs/<slug>/<n>.eml, recipients in job.json), never stdin: Plesk's callSbin
+from the panel does not always deliver stdin, and an empty message would
+still be sent.
+
+A mailbox's email is submitted by root with the mailbox as envelope sender;
+the website's by the subscription's system user, as its PHP would. Recipients
+are ours: the test address, and placement mailboxes the Email Spam Tester API
+handed out, which the extension checked and wrote to the job.
+"""
+import glob
+import json
+import os
+import pwd
+import random
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+SENDMAIL = "/usr/sbin/sendmail"
+JOBS = "/usr/local/psa/var/modules/email-spam-tester/jobs"
+ADDR_RE = re.compile(r"^[A-Za-z0-9._%+=-]{1,64}@[A-Za-z0-9.-]{1,253}$")
+SLUG_RE = re.compile(r"^[a-z0-9]{16,64}$")
+USER_RE = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
+LOGS = ("/var/log/maillog", "/var/log/mail.log")
+MAX_MESSAGE = 2 * 1024 * 1024
+MIN_MESSAGE = 100
+MAX_RECIPIENTS = 60
+
+
+def fail(message):
+    sys.stderr.write(message + "\n")
+    sys.exit(2)
+
+
+def check_user(sysuser):
+    if sysuser == "-":
+        return None
+    if not USER_RE.match(sysuser):
+        fail("bad system user")
+    try:
+        entry = pwd.getpwnam(sysuser)
+    except KeyError:
+        fail("no such system user")
+    if entry.pw_uid < 1000:
+        fail("not a subscription's user")
+    return sysuser
+
+
+#: sendmail gets a clean environment. Called from the panel, this process
+#: inherits the web request's CGI variables, and Plesk's sendmail wrapper then
+#: reads CONTENT_LENGTH bytes of the message (the length of the panel's form
+#: post) and sends a message with no body.
+CLEAN_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "HOME": "/root"}
+
+
+def sendmail(sender, sysuser, recipient, message):
+    cmd = [SENDMAIL, "-i", "-f", sender, "--", recipient]
+    if sysuser:
+        cmd = ["runuser", "-u", sysuser, "--"] + cmd
+    # From a regular file, not a pipe: the message is all there before
+    # sendmail starts reading, however it reads.
+    with tempfile.TemporaryFile() as fh:
+        fh.write(message)
+        fh.seek(0)
+        return subprocess.run(cmd, stdin=fh, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, env=CLEAN_ENV)
+
+
+TEST_RE = re.compile(r"^test-[a-z0-9]{20}@t\.email-spam-tester\.com$")
+
+
+def _panel_uid():
+    return pwd.getpwnam("psaadm").pw_uid
+
+
+def _open_job(slug):
+    """The job directory as a descriptor: no symlinks, owned by the panel, not
+    writable by anyone else. Everything below is opened relative to it."""
+    if not SLUG_RE.match(slug):
+        fail("bad slug")
+    base = os.open(JOBS, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        dfd = os.open(slug, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=base)
+    except OSError:
+        fail("no such job")
+    finally:
+        os.close(base)
+    st = os.fstat(dfd)
+    if st.st_uid != _panel_uid() or st.st_mode & 0o022:
+        fail("job directory has the wrong owner or mode")
+    return dfd
+
+
+def _read(dfd, name, limit):
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    try:
+        st = os.fstat(fd)
+        import stat
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != _panel_uid():
+            raise ValueError(f"{name} is not the panel's file")
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            return fh.read(limit + 1)
+    finally:
+        os.close(fd)
+
+
+def _job(slug):
+    dfd = _open_job(slug)
+    job = json.loads(_read(dfd, "job.json", 1 << 16))
+    sender, user = job["from"], check_user(job.get("sysuser") or "-")
+    items = [(str(n), str(r)) for n, r in job["recipients"].items()][:MAX_RECIPIENTS + 1]
+    ok = ADDR_RE.match(sender) and all(
+        n.isdigit() and (TEST_RE.match(r) if n == "0" else ADDR_RE.match(r)) for n, r in items)
+    if not ok:
+        fail("bad job")
+    return dfd, sender, user, items
+
+
+def _message(dfd, n):
+    message = _read(dfd, f"{n}.eml", MAX_MESSAGE)
+    if not MIN_MESSAGE <= len(message) <= MAX_MESSAGE:
+        raise ValueError(f"message {n} has {len(message)} bytes")
+    return message
+
+
+def send(argv):
+    """The test email itself, synchronously, so the page can say if it failed."""
+    if len(argv) != 1:
+        fail("usage: send <slug>")
+    dfd, sender, user, items = _job(argv[0])
+    rcpt = dict(items).get("0")
+    if not rcpt:
+        fail("no test address in the job")
+    try:
+        message = _message(dfd, "0")
+    except (OSError, ValueError) as exc:
+        fail(str(exc))
+    result = sendmail(sender, user, rcpt, message)
+    try:
+        os.unlink("0.eml", dir_fd=dfd)
+    except OSError:
+        pass
+    sys.stdout.write(result.stdout.decode(errors="replace"))
+    sys.stderr.write(result.stderr.decode(errors="replace"))
+    sys.exit(result.returncode)
+
+
+def _write_progress(dfd, data):
+    """A fresh file, then rename: never through a link someone left there."""
+    name = f".progress-{os.getpid()}-{random.randrange(1 << 30)}"
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=dfd)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(data, fh)
+    os.rename(name, "progress.json", src_dir_fd=dfd, dst_dir_fd=dfd)
+
+
+def batch(argv):
+    """Start in the background and return at once; the page reads progress.json."""
+    if len(argv) != 1:
+        fail("usage: batch <slug>")
+    dfd, sender, user, items = _job(argv[0])
+    items = [(n, r) for n, r in items if n != "0"]
+    if os.fork():
+        print(json.dumps({"started": len(items)}))
+        return
+    os.setsid()
+    if os.fork():
+        os._exit(0)
+    for fd in (0, 1, 2):
+        os.close(fd)
+    progress = {"total": len(items), "sent": 0, "failed": 0, "done": False}
+    random.shuffle(items)
+    for i, (n, rcpt) in enumerate(items):
+        try:
+            ok = sendmail(sender, user, rcpt, _message(dfd, n)).returncode == 0
+        except Exception:                                   # noqa: BLE001
+            ok = False
+        progress["sent" if ok else "failed"] += 1
+        try:
+            os.unlink(f"{n}.eml", dir_fd=dfd)
+        except OSError:
+            pass
+        _write_progress(dfd, progress)
+        if i + 1 < len(items):
+            time.sleep(random.uniform(2, 4))
+    progress["done"] = True
+    _write_progress(dfd, progress)
+    os._exit(0)
+
+
+def log(argv):
+    """Every line about this test's emails: the queue ids whose Message-ID is
+    this test's and whose sender is the test's own (a line anyone can write to
+    syslog does not make a stranger's queue id ours)."""
+    if len(argv) != 1 or not SLUG_RE.match(argv[0]):
+        fail("usage: log <slug>")
+    try:
+        dfd, sender, _, _ = _job(argv[0])
+    except SystemExit:
+        print(json.dumps({"lines": []}))
+        return
+    needle = f"message-id=<est-{argv[0]}-"
+    files = []
+    for name in LOGS:
+        files += [p for p in (name + ".1", name) if os.path.isfile(p)]
+    candidates, senders = set(), {}
+    cleanup_re = re.compile(r"postfix/cleanup\[\d+\]: ([0-9A-Za-z]{6,}): message-id=")
+    from_re = re.compile(r"postfix/qmgr\[\d+\]: ([0-9A-Za-z]{6,}): from=<([^<>]*)>")
+    for path in files:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                if needle in line:
+                    match = cleanup_re.search(line)
+                    if match:
+                        candidates.add(match.group(1))
+                elif "qmgr" in line and "from=<" in line:
+                    match = from_re.search(line)
+                    if match and match.group(1) in candidates:
+                        senders[match.group(1)] = match.group(2).lower()
+    qids = {q for q in candidates if senders.get(q) == sender.lower()}
+    lines = []
+    if qids:
+        pattern = re.compile(r": (" + "|".join(map(re.escape, qids)) + r"): ")
+        for path in files:
+            with open(path, errors="replace") as fh:
+                lines += [ln.rstrip("\n")[:1000] for ln in fh if pattern.search(ln)]
+    print(json.dumps({"lines": lines[-400:]}))
+
+
+def hostname(argv):
+    """smtp_helo_name when set to a name, else myhostname."""
+    def conf(name):
+        out = subprocess.run(["postconf", "-h", name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=20)
+        return out.stdout.strip()
+    helo = conf("smtp_helo_name")
+    print(helo if helo and not helo.startswith("$") else conf("myhostname"))
+
+
+def main():
+    if len(sys.argv) < 2:
+        fail("usage: est-helper send|batch|log")
+    command, args = sys.argv[1], sys.argv[2:]
+    {"send": send, "batch": batch, "log": log, "hostname": hostname}.get(command, lambda a: fail("unknown command"))(args)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:                                    # noqa: BLE001
+        # A short reason for the page, not a traceback.
+        fail(f"{type(exc).__name__}: {str(exc)[:200]}")

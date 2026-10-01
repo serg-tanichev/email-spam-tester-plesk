@@ -1,0 +1,51 @@
+<?php
+$V = 'Modules_EmailSpamTester_View';
+$u = $this->urls;
+$r = $this->report;
+$ready = $r && $r['analysis_status'] === 'checks_ready';
+$aiDone = $ready && $V::aiFinished($r['ai_status']);
+$pl = $this->placement;
+$plDone = !$pl || in_array($pl['status'], ['complete', 'timed_out'], true);
+$poll = !$ready || !$aiDone || !$plDone;
+?>
+<div class="est" <?php if ($poll): ?>data-poll="<?php echo $V::h($u['status']) ?>" data-ready="<?php echo $ready ? 1 : 0 ?>" data-ai="<?php echo $aiDone ? 1 : 0 ?>" data-placement="<?php echo $pl ? ($plDone ? 1 : 0) : 1 ?>"<?php endif ?>>
+<div class="est-actions">
+  <a class="est-btn" href="<?php echo $V::h($u['test']) ?>">Test again</a>
+  <a class="est-btn" href="<?php echo $V::h($u['history']) ?>">History</a>
+  <a class="est-btn" href="<?php echo $V::h($u['report']) ?>" target="_blank" rel="noopener">Full report ↗</a>
+</div>
+
+<?php if (!$ready): ?>
+  <section class="est-card est-progress">
+    <ol class="est-stages">
+      <li class="est-done">Email handed to the mail server</li>
+      <li data-stage="received">Email received by Email Spam Tester</li>
+      <li data-stage="checks" data-template="Checks: {done} of {total}">Checks: 0 of …</li>
+      <?php if ($this->progress): ?><li data-stage="seeds" data-template="Folder check: {sent} of {total} copies sent">Folder check: <?php echo (int)$this->progress['sent'] ?> of <?php echo (int)$this->progress['total'] ?> copies sent</li><?php endif ?>
+    </ol>
+    <div class="est-delivery" hidden>
+      <p>The email has not arrived yet. What this server's mail log says:</p>
+      <p class="est-delivery-summary est-bad"></p>
+    </div>
+  </section>
+<?php else: ?>
+  <?php echo $this->partial('index/_report.phtml', ['report' => $r, 'fixes' => $this->check ? $this->check['fixes'] : [],
+      'canFix' => $this->canFix, 'fixUrl' => $u['fix'] . '&report=' . rawurlencode($this->slug), 'adviseUrl' => null]) ?>
+<?php endif ?>
+
+<?php if ($pl): ?>
+<section class="est-card">
+  <h3 class="est-h">Folder at email providers</h3>
+  <?php if (!$plDone): ?><p class="est-muted">Test mailboxes are being checked; this takes up to half an hour.</p><?php endif ?>
+  <table class="est-table"><tbody>
+  <?php foreach ($V::placementRows($pl, $this->delivery ?: []) as $row): ?>
+    <tr><td><?php echo $V::h($row['provider']) ?></td>
+      <td><?php if ($row['refusal']): ?>
+          <span class="est-bad"><?php echo $row['refusal']['status'] === 'deferred' ? 'Deferred, retrying' : 'Refused by the provider' ?></span>
+          <div class="est-muted est-small"><?php echo $V::h(trim(($row['refusal']['code'] ?: '') . ' ' . $row['refusal']['reason'])) ?></div>
+        <?php else: ?><span class="est-folder est-folder-<?php echo $V::h($row['placement']) ?>"><?php echo $V::h($V::folderName($row['placement'])) ?></span><?php endif ?></td></tr>
+  <?php endforeach ?>
+  </tbody></table>
+</section>
+<?php endif ?>
+</div>

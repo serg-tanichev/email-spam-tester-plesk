@@ -1,0 +1,261 @@
+#!/opt/psa/bin/py3-python
+"""Email Spam Tester: root side of constant monitoring on a Plesk server.
+
+Called by the extension through pm_ApiCli::callSbin, and by root by hand:
+
+    est-monitor status                 where the rule stands (JSON)
+    est-monitor enable [--dry-run]     install the handler and the est-inject listener
+    est-monitor disable [--dry-run]    remove both and empty the list
+    est-monitor refresh                put back what Plesk or an upgrade took out
+    est-monitor set                    replace the list of domains (JSON on stdin)
+
+What goes in: a copy of the handler in /usr/local/lib/email-spam-tester, a
+global before-remote mail handler that runs it, a Postfix listener on
+127.0.0.1:10597 without milters that accepts only m-…@t.email-spam-tester.com,
+and /etc/email-spam-tester/monitor.json. Enable checks every step and takes
+all of it out again if one fails.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+LIB = "/usr/local/lib/email-spam-tester"
+HANDLER = f"{LIB}/est-copy-handler"
+CONF_DIR = "/etc/email-spam-tester"
+LIST = f"{CONF_DIR}/monitor.json"
+RCPT_MAP = "/etc/postfix/est_inject_rcpt"
+MASTER = "/etc/postfix/master.cf"
+MHC = "/usr/local/psa/admin/sbin/mail_handlers_control"
+NAME = "email-spam-tester"
+PRIORITY = "20"
+BEGIN = "# BEGIN email-spam-tester (do not edit: est-monitor manages this block)"
+END = "# END email-spam-tester"
+DOMAIN_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$")
+ADDRESS_RE = re.compile(r"^m-[a-z0-9]{20}@t\.email-spam-tester\.com$")
+
+MASTER_BLOCK = f"""{BEGIN}
+127.0.0.1:10597 inet n - n - 10 smtpd
+  -o syslog_name=postfix/est-inject
+  -o smtpd_client_connection_count_limit=10
+  -o smtpd_client_event_limit_exceptions=
+  -o smtpd_timeout=30s
+  -o smtpd_milters=
+  -o non_smtpd_milters=
+  -o receive_override_options=no_milters,no_address_mappings,no_header_body_checks,no_unknown_recipient_checks
+  -o content_filter=
+  -o smtpd_client_restrictions=permit_mynetworks,reject
+  -o mynetworks=127.0.0.0/8
+  -o smtpd_helo_restrictions=
+  -o smtpd_sender_restrictions=
+  -o smtpd_relay_restrictions=check_recipient_access,regexp:{RCPT_MAP},reject
+  -o smtpd_recipient_restrictions=check_recipient_access,regexp:{RCPT_MAP},reject
+  -o smtpd_data_restrictions=
+  -o smtpd_tls_security_level=none
+  -o smtpd_sasl_auth_enable=no
+  -o smtpd_proxy_filter=
+{END}
+"""
+RCPT_BODY = "/^m-[a-z0-9]{20}@t\\.email-spam-tester\\.com$/ OK\n"
+
+
+def run(*cmd, check=True):
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"{' '.join(cmd)}: {(result.stderr or result.stdout).strip()[:300]}")
+    return result
+
+
+def write_atomic(path, text, mode, group=None):
+    folder = os.path.dirname(path)
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".est-")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+    os.chmod(tmp, mode)
+    if group:
+        shutil.chown(tmp, "root", group)
+    os.replace(tmp, path)
+
+
+def master_text():
+    with open(MASTER) as fh:
+        return fh.read()
+
+
+def without_block(text):
+    return re.sub(rf"\n?{re.escape(BEGIN)}.*?{re.escape(END)}\n?", "\n", text, flags=re.S)
+
+
+def _ours():
+    out = run(MHC, "--list", "--json", check=False).stdout
+    try:
+        handlers = json.loads(out).get("handlers", [])
+    except ValueError:
+        return None
+    return next((h for h in handlers
+                 if h.get("name") == NAME and h.get("queue") == "before-remote"), None)
+
+
+def handler_registered():
+    """Registered and enabled: a disabled handler copies nothing."""
+    ours = _ours()
+    return bool(ours and ours.get("enabled"))
+
+
+def status():
+    text = master_text()
+    listed = {}
+    try:
+        with open(LIST) as fh:
+            listed = json.load(fh).get("domains") or {}
+    except (OSError, ValueError):
+        pass
+    parts = {"handler_file": os.path.exists(HANDLER), "handler": handler_registered(),
+             "listener": BEGIN in text, "rcpt_map": os.path.exists(RCPT_MAP)}
+    state = "active" if all(parts.values()) else "off" if not any(parts.values()) else "partial"
+    return {"state": state, **parts, "domains": sorted(listed)}
+
+
+def enable(dry_run=False):
+    steps = []
+    source = os.path.join(HERE, "est-copy-handler.py")
+    if not os.path.exists(source):
+        raise RuntimeError(f"missing {source}")
+    run("/opt/psa/bin/py3-python", "-m", "py_compile", source)
+    steps.append("handler compiles")
+    candidate = without_block(master_text()).rstrip("\n") + "\n\n" + MASTER_BLOCK
+    with tempfile.TemporaryDirectory() as tmp:
+        shutil.copy("/etc/postfix/main.cf", f"{tmp}/main.cf")
+        with open(f"{tmp}/master.cf", "w") as fh:
+            fh.write(candidate)
+        with open(f"{tmp}/est_inject_rcpt", "w") as fh:
+            fh.write(RCPT_BODY)
+        run("postconf", "-c", tmp, "-M", "127.0.0.1:10597/inet")
+    steps.append("master.cf with the listener parses")
+    if dry_run:
+        return {"dry_run": True, "steps": steps}
+    before = master_text()
+    try:
+        os.makedirs(LIB, mode=0o755, exist_ok=True)
+        if not same_file(source, HANDLER):
+            # Never truncate the live handler: a handler starting meanwhile
+            # would read an empty script and send mail on empty.
+            tmp = HANDLER + ".new"
+            shutil.copy(source, tmp)
+            os.chmod(tmp, 0o755)
+            os.replace(tmp, HANDLER)
+        os.makedirs(CONF_DIR, mode=0o750, exist_ok=True)
+        shutil.chown(CONF_DIR, "root", "popuser")
+        if not os.path.exists(LIST):
+            write_atomic(LIST, json.dumps({"domains": {}, "uid_domains": {}}), 0o640, "popuser")
+        write_atomic(RCPT_MAP, RCPT_BODY, 0o644)
+        if before != candidate:
+            write_atomic(MASTER, candidate, 0o644)
+            run("postfix", "check")
+            run("postfix", "reload")
+        steps.append("listener on 127.0.0.1:10597")
+        ours = _ours()
+        if ours is None:
+            run(MHC, "--add", f"--priority={PRIORITY}", f"--name={NAME}", "--queue=before-remote",
+                "--type=global", f"--executable={HANDLER}", "--enabled")
+        elif not ours.get("enabled"):
+            run(MHC, "--enable", f"--name={NAME}", "--type=global", "--queue=before-remote")
+        steps.append("mail handler before-remote")
+    except Exception:
+        write_atomic(MASTER, before, 0o644)
+        run("postfix", "reload", check=False)
+        run(MHC, "--remove", f"--name={NAME}", "--type=global", "--queue=before-remote", check=False)
+        raise
+    return {"dry_run": False, "steps": steps, **status()}
+
+
+def disable(dry_run=False):
+    if dry_run:
+        return {"dry_run": True, "would_remove": [HANDLER, RCPT_MAP, LIST, "master.cf block",
+                                                  "mail handler"]}
+    run(MHC, "--remove", f"--name={NAME}", "--type=global", "--queue=before-remote", check=False)
+    text = master_text()
+    if BEGIN in text:
+        write_atomic(MASTER, without_block(text), 0o644)
+        run("postfix", "reload", check=False)
+    for path in (HANDLER, RCPT_MAP, LIST):
+        if os.path.exists(path):
+            os.remove(path)
+    for folder in (LIB, CONF_DIR):
+        try:
+            os.rmdir(folder)
+        except OSError:
+            pass
+    return {"dry_run": False, **status()}
+
+
+def same_file(a, b):
+    try:
+        with open(a, "rb") as x, open(b, "rb") as y:
+            return x.read() == y.read()
+    except OSError:
+        return False
+
+
+def refresh():
+    """Put back what went missing, if monitoring was on; the list stays.
+    Nothing is written and Postfix not reloaded when nothing differs."""
+    current = status()
+    if current["state"] == "off":
+        return current
+    source = os.path.join(HERE, "est-copy-handler.py")
+    if current["state"] == "active" and same_file(source, HANDLER):
+        return current
+    return enable()
+
+
+def set_domains(payload):
+    """{"domains": {domain: {"address"}}, "uid_domains": {uid: [domains]}}"""
+    if status()["state"] != "active":
+        raise RuntimeError("monitoring is not active on this server")
+    domains = {}
+    for domain, entry in (payload.get("domains") or {}).items():
+        domain = str(domain).lower()
+        address = str((entry or {}).get("address", "")).lower()
+        if not DOMAIN_RE.match(domain) or not ADDRESS_RE.match(address):
+            raise RuntimeError(f"refused entry for {domain!r}")
+        domains[domain] = {"address": address}
+    uid_domains = {}
+    for uid, owned in (payload.get("uid_domains") or {}).items():
+        if not str(uid).isdigit():
+            raise RuntimeError("bad uid")
+        uid_domains[str(uid)] = sorted({str(d).lower() for d in owned
+                                        if DOMAIN_RE.match(str(d).lower())})
+    write_atomic(LIST, json.dumps({"domains": domains, "uid_domains": uid_domains}), 0o640,
+                 "popuser")
+    return status()
+
+
+def main(argv):
+    command = argv[1] if len(argv) > 1 else "status"
+    dry = "--dry-run" in argv
+    if command == "status":
+        out = status()
+    elif command == "enable":
+        out = enable(dry)
+    elif command == "disable":
+        out = disable(dry)
+    elif command == "refresh":
+        out = refresh()
+    elif command == "set":
+        out = set_domains(json.loads(sys.stdin.read(1 << 20) or "{}"))
+    else:
+        raise RuntimeError("usage: est-monitor status|enable|disable|refresh|set [--dry-run]")
+    print(json.dumps(out))
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv)
+    except Exception as exc:                                # noqa: BLE001
+        print(json.dumps({"error": str(exc)[:500]}))
+        sys.exit(1)

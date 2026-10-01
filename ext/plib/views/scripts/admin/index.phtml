@@ -1,0 +1,64 @@
+<?php
+$V = 'Modules_EmailSpamTester_View';
+$url = $this->url;
+$csrf = '<input type="hidden" name="forgery_protection_token" value="">';
+$m = $this->monitor;
+?>
+<div class="est">
+<section class="est-card">
+  <h3 class="est-h">Registration</h3>
+  <?php if ($this->registered): ?>
+    <p><span class="est-good">Registered</span> as installation #<?php echo (int)$this->installationId ?> on <?php echo $V::h($V::when($this->registeredAt)) ?>. Customers see Email Spam Tester in the Mail section of their domains.</p>
+  <?php else: ?>
+    <p>Registration sends the server's hostname, the Plesk and extension versions, the number of domains and, if you give one, an email for notices about the service. Email Spam Tester answers with a key that stays on this server.</p>
+    <form method="post" action="<?php echo $V::h($url('register')) ?>" class="est-form"><?php echo $csrf ?>
+      <label>Administrator's email (optional) <input type="email" name="admin_email"></label>
+      <button type="submit" class="est-btn est-primary">Register this server</button>
+    </form>
+  <?php endif ?>
+</section>
+
+<?php if ($this->limits): $l = $this->limits; ?>
+<section class="est-card">
+  <h3 class="est-h">Limits for customers</h3>
+  <p class="est-muted">0 or empty means no limit of yours. Email Spam Tester's own limits for the whole server are shown on the right.</p>
+  <form method="post" action="<?php echo $V::h($url('limits')) ?>" class="est-form"><?php echo $csrf ?>
+    <?php foreach ($this->limitNames as $key => $label): ?>
+      <label><?php echo $V::h($label) ?> <input type="number" min="0" name="<?php echo $V::h($key) ?>" value="<?php echo (int)$l['limits'][$key] ?: '' ?>"></label>
+    <?php endforeach ?>
+    <button type="submit" class="est-btn est-primary">Save</button>
+  </form>
+  <p class="est-muted est-small">Today on this server: <?php echo (int)$l['today']['tests'] ?> tests counted, <?php echo (int)$l['today']['placements'] ?> folder checks, <?php echo (int)$l['today']['copies'] ?> monitored emails, <?php echo (int)$l['today']['advice'] ?> AI plans. Server limits: folder checks <?php echo (int)$l['ceilings']['placements_per_day'] ?: 'unlimited' ?> a day, monitored domains <?php echo (int)$l['ceilings']['monitored_domains'] ?>, monitored emails <?php echo (int)$l['ceilings']['copies_per_day'] ?> a day.</p>
+</section>
+<?php endif ?>
+
+<section class="est-card">
+  <h3 class="est-h">Constant monitoring</h3>
+  <p class="est-muted">When allowed, customers can switch it on for their domains. This server then copies every email those domains send; the copy goes to the domain's private address at Email Spam Tester. What goes in: a Plesk mail handler after DKIM signing, and a Postfix listener on 127.0.0.1:10597 that accepts only those addresses. Nothing is copied for a domain until its owner switches it on.</p>
+  <?php if (!$m): ?><p class="est-note">State unknown.</p>
+  <?php else: ?>
+    <p>State: <strong class="<?php echo $m['state'] === 'active' ? 'est-good' : ($m['state'] === 'partial' ? 'est-bad' : 'est-muted') ?>"><?php echo $V::h($m['state']) ?></strong><?php if ($m['state'] !== 'off'): ?>, <?php echo (int)$this->monitored ?> domains on<?php endif ?>.</p>
+    <form method="post" action="<?php echo $V::h($url('monitoring')) ?>"><?php echo $csrf ?>
+      <?php if ($m['state'] !== 'active'): ?><button type="submit" name="do" value="allow" class="est-btn est-primary"<?php echo $this->registered ? '' : ' disabled' ?>><?php echo $m['state'] === 'partial' ? 'Repair' : 'Allow constant monitoring on this server' ?></button><?php endif ?>
+      <?php if ($m['state'] !== 'off'): ?><button type="submit" name="do" value="disable" class="est-btn">Disable on the whole server</button><?php endif ?>
+    </form>
+  <?php endif ?>
+</section>
+
+<?php if ($this->serverCheck): $s = $this->serverCheck['server']; ?>
+<section class="est-card">
+  <h3 class="est-h">This server's mail identity</h3>
+  <p>Postfix introduces itself as <code><?php echo $V::h($s['helo']) ?></code>. Receivers expect each sending IP's PTR record to name it, and that name to point back to the IP.</p>
+  <table class="est-table"><thead><tr><th>IP</th><th>PTR</th><th>Points back</th><th>Matches the name</th><th>Blocklists</th></tr></thead><tbody>
+  <?php foreach ($s['ips'] as $ip): ?>
+    <tr><td><?php echo $V::h($ip['ip']) ?></td>
+      <td><?php echo $ip['ptr'] ? $V::h($ip['ptr']) : '<span class="est-bad">none</span>' ?></td>
+      <td><?php echo $ip['forward_confirmed'] ? '<span class="est-good">yes</span>' : '<span class="est-bad">no</span>' ?></td>
+      <td><?php echo $ip['matches_helo'] ? '<span class="est-good">yes</span>' : '<span class="est-bad">no — ask your IP provider to set PTR to ' . $V::h($ip['expected_ptr']) . '</span>' ?></td>
+      <td><?php echo $ip['blocklists']['listed'] ? '<span class="est-bad">' . $V::h(implode(', ', $ip['blocklists']['listed'])) . '</span>' : '<span class="est-good">none of ' . (int)$ip['blocklists']['checked'] . '</span>' ?></td></tr>
+  <?php endforeach ?>
+  <?php if (!$s['ips']): ?><tr><td colspan="5" class="est-muted">No public IP found on this server.</td></tr><?php endif ?>
+  </tbody></table>
+</section>
+<?php endif ?>
+</div>

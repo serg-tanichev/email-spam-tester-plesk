@@ -1,0 +1,10 @@
+<?php $V = 'Modules_EmailSpamTester_View'; $u = $this->urls; $r = $this->report; ?>
+<div class="est" <?php if ($r['ai_status'] === 'pending' || $r['ai_status'] === 'running'): ?>data-refresh="20"<?php endif ?>>
+<div class="est-actions"><a class="est-btn" href="<?php echo $V::h($u['monitoring']) ?>">Back to monitoring</a></div>
+<?php if ($r['analysis_status'] !== 'checks_ready'): ?>
+  <p class="est-muted">This email is still being checked.</p>
+<?php else: ?>
+  <?php echo $this->partial('index/_report.phtml', ['report' => $r, 'fixes' => [], 'canFix' => false, 'fixUrl' => '',
+      'adviseUrl' => $u['advise']]) ?>
+<?php endif ?>
+</div>
